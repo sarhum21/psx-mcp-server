@@ -66,9 +66,8 @@ def main() -> None:
     )
 
     app = mcp.streamable_http_app(
-        transport_security=transport_security,
-        host="0.0.0.0",
-    )
+    host="0.0.0.0",
+)
 
     uvicorn.run(app, host="0.0.0.0", port=port)
 
