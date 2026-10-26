@@ -1,4 +1,3 @@
-
 """FastMCP server entry point for psx-mcp-server.
 
 Wires one shared PSXClient into the tool/resource layers and runs over stdio.
@@ -30,6 +29,18 @@ async def _lifespan(_server: FastMCP) -> AsyncIterator[dict]:
     finally:
         await _client.close()
 
+port = int(os.environ.get("PORT", "10000"))
+allowed_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+
+if not allowed_host:
+    raise RuntimeError(
+        "RENDER_EXTERNAL_HOSTNAME must be set by the hosting provider."
+    )
+
+transport_security = TransportSecuritySettings(
+    allowed_hosts=[allowed_host, f"{allowed_host}:*"],
+    allowed_origins=[f"https://{allowed_host}"],
+)
 
 mcp = FastMCP(
     "psx",
@@ -41,6 +52,9 @@ mcp = FastMCP(
         "PSX Data Portal and is informational only, not investment advice."
     ),
     lifespan=_lifespan,
+    host="0.0.0.0",
+    port=port,
+    transport_security=transport_security,
 )
 
 register_tools(mcp, _client)
@@ -51,27 +65,8 @@ register_prompts(mcp)
 
 def main() -> None:
     """Run the MCP server over Streamable HTTP."""
-    port = int(os.environ.get("PORT", "10000"))
-    allowed_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
-
-    if not allowed_host:
-        raise RuntimeError(
-            "RENDER_EXTERNAL_HOSTNAME must be set by the hosting provider."
-        )
-
-    transport_security = TransportSecuritySettings(
-        allowed_hosts=[allowed_host, f"{allowed_host}:*"],
-        allowed_origins=[f"https://{allowed_host}"],
-    )
-
-    mcp.run(
-        transport="streamable-http",
-        host="0.0.0.0",
-        port=port,
-        transport_security=transport_security,
-    )
+    mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":
     main()
-
