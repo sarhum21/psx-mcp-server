@@ -46,8 +46,26 @@ register_prompts(mcp)
 
 
 def main() -> None:
-    """Console-script entry point. Runs the MCP server over stdio."""
-    mcp.run()
+    """Run the MCP server over Streamable HTTP."""
+    port = int(os.environ.get("PORT", "10000"))
+    allowed_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+
+    if not allowed_host:
+        raise RuntimeError(
+            "RENDER_EXTERNAL_HOSTNAME must be set by the hosting provider."
+        )
+
+    transport_security = TransportSecuritySettings(
+        allowed_hosts=[allowed_host, f"{allowed_host}:*"],
+        allowed_origins=[f"https://{allowed_host}"],
+    )
+
+    mcp.run(
+        transport="streamable-http",
+        host="0.0.0.0",
+        port=port,
+        transport_security=transport_security,
+    )
 
 
 if __name__ == "__main__":
