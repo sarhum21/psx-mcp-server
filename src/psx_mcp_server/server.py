@@ -50,6 +50,8 @@ register_prompts(mcp)
 
 def main() -> None:
     """Run the MCP server over Streamable HTTP."""
+    import uvicorn
+
     port = int(os.environ.get("PORT", "10000"))
     allowed_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
 
@@ -63,12 +65,12 @@ def main() -> None:
         allowed_origins=[f"https://{allowed_host}"],
     )
 
-    mcp.run(
-        transport="streamable-http",
-        host="0.0.0.0",
-        port=port,
+    app = mcp.streamable_http_app(
         transport_security=transport_security,
+        host="0.0.0.0",
     )
+
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
