@@ -24,9 +24,11 @@ _client = PSXClient()
 
 @asynccontextmanager
 async def _lifespan(_server: FastMCP) -> AsyncIterator[dict]:
+    print("PSX MCP lifespan started", flush=True)
     try:
         yield {}
     finally:
+        print("PSX MCP lifespan shutting down", flush=True)
         await _client.close()
 
 port = int(os.environ.get("PORT", "10000"))
