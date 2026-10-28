@@ -1,9 +1,4 @@
-"""Async HTTP client for the PSX Data Portal.
-
-Owns all network I/O: URLs, an identifying User-Agent, per-endpoint TTL caching,
-and retry/backoff with error mapping. Returns raw response text — parsing lives
-in parsers/, so this layer stays free of markup knowledge.
-"""
+"""Async HTTP client for the PSX Data Portal."""
 
 from __future__ import annotations
 
@@ -12,6 +7,7 @@ import os
 from datetime import datetime
 
 import httpx
+from psx_dps import Transport
 
 from . import __version__
 from ._util import PKT, normalize_symbol
@@ -20,8 +16,6 @@ from .errors import PSXUnavailableError
 
 BASE_URL = "https://dps.psx.com.pk"
 
-# Per-endpoint cache lifetimes (seconds). Intraday moves fast; the symbol
-# directory barely changes day to day.
 TTL_INTRADAY = 30
 TTL_MARKET = 60
 TTL_INDICES = 60
@@ -37,7 +31,6 @@ _DEFAULT_UA = (
     "(+https://github.com/ahmedraza-96/psx-mcp-server)"
 )
 
-# httpx exceptions worth a retry (transient transport failures).
 _RETRYABLE_EXC = (
     httpx.ConnectError,
     httpx.ConnectTimeout,
@@ -66,22 +59,24 @@ class PSXClient:
             or _DEFAULT_UA
         )
 
-        self._client = client or httpx.AsyncClient(
-            base_url=base_url,
-            timeout=httpx.Timeout(timeout, connect=5.0),
-            follow_redirects=True,
-            headers={
-                "User-Agent": ua,
-                "Accept": "text/html,application/json",
-            },
-        )
+        self._transport = None
+        self._client = client
+
+        if client is None:
+            self._transport = Transport(
+                timeout=timeout,
+                retries=max_retries,
+                user_agent=ua,
+            )
 
         self._cache = TTLCache()
 
     async def close(self) -> None:
-        await self._client.aclose()
+        if self._transport is not None:
+            await asyncio.to_thread(self._transport.close)
 
-    # -- Endpoint methods (return raw text) -------------------------------
+        if self._client is not None:
+            await self._client.aclose()
 
     async def fetch_symbols(self) -> str:
         return await self._get("/symbols", TTL_SYMBOLS)
@@ -128,22 +123,17 @@ class PSXClient:
             "year": str(year),
             "symbol": normalize_symbol(symbol),
         }
-
         return await self._post(
             "/historical",
             form,
             self._historical_ttl(month, year),
         )
 
-    # -- Internals --------------------------------------------------------
-
     @staticmethod
     def _historical_ttl(month: int, year: int) -> int:
         now = datetime.now(PKT)
-
         if (year, month) < (now.year, now.month):
             return TTL_HISTORICAL_PAST
-
         return TTL_HISTORICAL_CURRENT
 
     async def _get(self, path: str, ttl: int) -> str:
@@ -171,9 +161,24 @@ class PSXClient:
         )
 
         cached = self._cache.get(key)
-
         if cached is not None:
             return cached
+
+        if self._transport is not None:
+            try:
+                response_text = await asyncio.to_thread(
+                    self._transport.request,
+                    path,
+                    form,
+                    ttl,
+                )
+            except Exception as exc:
+                raise PSXUnavailableError(
+                    f"PSX Data Portal request failed for {path}: {exc}"
+                ) from exc
+
+            self._cache.set(key, response_text, ttl)
+            return response_text
 
         headers = (
             {"X-Requested-With": "XMLHttpRequest"}
@@ -191,10 +196,8 @@ class PSXClient:
                     data=form,
                     headers=headers,
                 )
-
             except _RETRYABLE_EXC as exc:
                 last_exc = exc
-
             else:
                 if resp.status_code < 400:
                     self._cache.set(key, resp.text, ttl)
@@ -211,12 +214,10 @@ class PSXClient:
                 )
 
             if attempt < self._max_retries - 1:
-                await asyncio.sleep(
-                    self._backoff_base * (2**attempt)
-                )
+                await asyncio.sleep(self._backoff_base * (2**attempt))
 
         raise PSXUnavailableError(
             f"PSX Data Portal (dps.psx.com.pk) is not responding for {path} "
             f"after {self._max_retries} attempts ({last_exc}). "
-            "This is a PSX-side issue; please try again shortly."
+            "Please try again shortly."
         )
