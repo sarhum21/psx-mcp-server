@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 from datetime import datetime
 
 import httpx
@@ -33,7 +32,10 @@ TTL_SYMBOLS = 86400
 TTL_HISTORICAL_PAST = 86400
 TTL_HISTORICAL_CURRENT = 3600
 
-_DEFAULT_UA = f"psx-mcp-server/{__version__} (+https://github.com/ahmedraza-96/psx-mcp-server)"
+_DEFAULT_UA = (
+    f"psx-mcp-server/{__version__} "
+    "(+https://github.com/ahmedraza-96/psx-mcp-server)"
+)
 
 # httpx exceptions worth a retry (transient transport failures).
 _RETRYABLE_EXC = (
@@ -57,31 +59,50 @@ class PSXClient:
     ) -> None:
         self._max_retries = max_retries
         self._backoff_base = backoff_base
-        ua = user_agent or os.environ.get("PSX_MCP_USER_AGENT") or _DEFAULT_UA
+
+        ua = (
+            user_agent
+            or os.environ.get("PSX_MCP_USER_AGENT")
+            or _DEFAULT_UA
+        )
+
         self._client = client or httpx.AsyncClient(
             base_url=base_url,
             timeout=httpx.Timeout(timeout, connect=5.0),
             follow_redirects=True,
-            headers={"User-Agent": ua, "Accept": "text/html,application/json"},
+            headers={
+                "User-Agent": ua,
+                "Accept": "text/html,application/json",
+            },
         )
+
         self._cache = TTLCache()
 
     async def close(self) -> None:
         await self._client.aclose()
 
-    # -- endpoint methods (return raw text) --------------------------------
+    # -- Endpoint methods (return raw text) -------------------------------
 
     async def fetch_symbols(self) -> str:
         return await self._get("/symbols", TTL_SYMBOLS)
 
     async def fetch_intraday(self, symbol: str) -> str:
-        return await self._get(f"/timeseries/int/{normalize_symbol(symbol)}", TTL_INTRADAY)
+        return await self._get(
+            f"/timeseries/int/{normalize_symbol(symbol)}",
+            TTL_INTRADAY,
+        )
 
     async def fetch_eod(self, symbol: str) -> str:
-        return await self._get(f"/timeseries/eod/{normalize_symbol(symbol)}", TTL_EOD)
+        return await self._get(
+            f"/timeseries/eod/{normalize_symbol(symbol)}",
+            TTL_EOD,
+        )
 
     async def fetch_company(self, symbol: str) -> str:
-        return await self._get(f"/company/{normalize_symbol(symbol)}", TTL_COMPANY)
+        return await self._get(
+            f"/company/{normalize_symbol(symbol)}",
+            TTL_COMPANY,
+        )
 
     async def fetch_market_watch(self) -> str:
         return await self._get("/market-watch", TTL_MARKET)
@@ -91,29 +112,51 @@ class PSXClient:
 
     async def fetch_payouts(self, symbol: str) -> str:
         return await self._post(
-            "/company/payouts", {"symbol": normalize_symbol(symbol)}, TTL_PAYOUTS
+            "/company/payouts",
+            {"symbol": normalize_symbol(symbol)},
+            TTL_PAYOUTS,
         )
 
-    async def fetch_historical(self, symbol: str, month: int, year: int) -> str:
-        form = {"month": str(month), "year": str(year), "symbol": normalize_symbol(symbol)}
-        return await self._post("/historical", form, self._historical_ttl(month, year))
+    async def fetch_historical(
+        self,
+        symbol: str,
+        month: int,
+        year: int,
+    ) -> str:
+        form = {
+            "month": str(month),
+            "year": str(year),
+            "symbol": normalize_symbol(symbol),
+        }
 
-    # -- internals ---------------------------------------------------------
+        return await self._post(
+            "/historical",
+            form,
+            self._historical_ttl(month, year),
+        )
+
+    # -- Internals --------------------------------------------------------
 
     @staticmethod
     def _historical_ttl(month: int, year: int) -> int:
         now = datetime.now(PKT)
+
         if (year, month) < (now.year, now.month):
             return TTL_HISTORICAL_PAST
+
         return TTL_HISTORICAL_CURRENT
 
     async def _get(self, path: str, ttl: int) -> str:
         return await self._request("GET", path, None, ttl)
 
-    async def _post(self, path: str, form: dict[str, str], ttl: int) -> str:
+    async def _post(
+        self,
+        path: str,
+        form: dict[str, str],
+        ttl: int,
+    ) -> str:
         return await self._request("POST", path, form, ttl)
 
-   
     async def _request(
         self,
         method: str,
@@ -121,35 +164,27 @@ class PSXClient:
         form: dict[str, str] | None,
         ttl: int,
     ) -> str:
-        key = (method, path, frozenset(form.items()) if form else None)
+        key = (
+            method,
+            path,
+            frozenset(form.items()) if form else None,
+        )
+
         cached = self._cache.get(key)
+
         if cached is not None:
             return cached
+
+        headers = (
+            {"X-Requested-With": "XMLHttpRequest"}
+            if method == "POST"
+            else None
+        )
 
         last_exc: Exception | None = None
 
         for attempt in range(self._max_retries):
             try:
-                homepage = await self._client.get("/")
-                homepage.raise_for_status()
-
-                match = re.search(
-                    r'X-Req-Id["\']?\s*[:=]\s*["\']([^"\']+)',
-                    homepage.text,
-                    re.IGNORECASE,
-                )
-
-                if not match:
-                    raise PSXUnavailableError(
-                        "Could not find X-Req-Id in the PSX homepage."
-                    )
-
-                headers = {
-                    "X-Req-Id": match.group(1),
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Referer": f"{BASE_URL}/",
-                }
-
                 resp = await self._client.request(
                     method,
                     path,
@@ -157,53 +192,31 @@ class PSXClient:
                     headers=headers,
                 )
 
+            except _RETRYABLE_EXC as exc:
+                last_exc = exc
+
+            else:
                 if resp.status_code < 400:
                     self._cache.set(key, resp.text, ttl)
                     return resp.text
 
                 if resp.status_code < 500:
                     raise PSXUnavailableError(
-                        f"PSX returned HTTP {resp.status_code} for {path}."
+                        f"PSX returned HTTP {resp.status_code} for {path}. "
+                        "The endpoint or symbol may be invalid."
                     )
 
                 last_exc = PSXUnavailableError(
                     f"PSX returned HTTP {resp.status_code} for {path}."
                 )
 
-            except _RETRYABLE_EXC as exc:
-                last_exc = exc
-
             if attempt < self._max_retries - 1:
-                await asyncio.sleep(self._backoff_base * (2**attempt))
-
-        raise PSXUnavailableError(
-            f"PSX request failed for {path} after "
-            f"{self._max_retries} attempts: {last_exc}"
-        )
-
-        headers = {"X-Requested-With": "XMLHttpRequest"} if method == "POST" else None
-        last_exc: Exception | None = None
-        for attempt in range(self._max_retries):
-            try:
-                resp = await self._client.request(method, path, data=form, headers=headers)
-            except _RETRYABLE_EXC as exc:
-                last_exc = exc
-            else:
-                if resp.status_code < 400:
-                    self._cache.set(key, resp.text, ttl)
-                    return resp.text
-                if resp.status_code < 500:
-                    # Client error — not transient, do not retry.
-                    raise PSXUnavailableError(
-                        f"PSX returned HTTP {resp.status_code} for {path}. "
-                        f"The endpoint or symbol may be invalid."
-                    )
-                last_exc = PSXUnavailableError(f"PSX returned HTTP {resp.status_code} for {path}.")
-            if attempt < self._max_retries - 1:
-                await asyncio.sleep(self._backoff_base * (2**attempt))
+                await asyncio.sleep(
+                    self._backoff_base * (2**attempt)
+                )
 
         raise PSXUnavailableError(
             f"PSX Data Portal (dps.psx.com.pk) is not responding for {path} "
-            f"after {self._max_retries} attempts ({last_exc}). This is a PSX-side "
-            f"issue; please try again shortly."
+            f"after {self._max_retries} attempts ({last_exc}). "
+            "This is a PSX-side issue; please try again shortly."
         )
