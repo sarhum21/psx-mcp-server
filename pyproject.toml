@@ -7,7 +7,7 @@ name = "psx-mcp-server"
 dynamic = ["version"]
 description = "Model Context Protocol server for the Pakistan Stock Exchange — live quotes, EOD history, indices, fundamentals, dividends, and announcements as LLM-callable tools."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Ahmed Raza", email = "ahmedrazaamjad101@gmail.com" }]
@@ -40,6 +40,7 @@ dependencies = [
     "lxml>=5.0",
     "tzdata>=2024.1",
     "psx-dps @ git+https://github.com/umairsandhu/psx-dps.git",
+    "psxdata>=1.2.0",
 ]
 
 

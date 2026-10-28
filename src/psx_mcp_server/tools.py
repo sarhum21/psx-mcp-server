@@ -9,8 +9,12 @@ tool.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Literal
+
+import pandas as pd
+import psxdata
 
 from mcp.server.fastmcp import FastMCP
 
@@ -44,7 +48,9 @@ def register_tools(mcp: FastMCP, client: PSXClient) -> None:
         return sym
 
     @mcp.tool()
-    async def search_symbols(query: str, sector: str | None = None, limit: int = 20) -> dict:
+    async def search_symbols(
+        query: str, sector: str | None = None, limit: int = 20
+    ) -> dict:
         """Search PSX ticker symbols by symbol or company name.
 
         Use this FIRST whenever you are unsure of the exact ticker
@@ -93,13 +99,39 @@ def register_tools(mcp: FastMCP, client: PSXClient) -> None:
         outside hours it reflects the last session. For an index use get_indices.
         """
         sym = await _require_known(symbol)
-        quote = parse_quote(await client.fetch_company(sym))
-        return {"symbol": sym, **quote.to_dict()}
+
+        try:
+            quote = parse_quote(await client.fetch_company(sym))
+            return {"symbol": sym, **quote.to_dict()}
+        except Exception:
+            df = await asyncio.to_thread(psxdata.quote, sym)
+
+            if df.empty:
+                raise NoDataError(f"No quote data available for {sym}.")
+
+            data = df.iloc[0].to_dict()
+            data = {
+                key: (
+                    None
+                    if pd.isna(value)
+                    else value.item()
+                    if hasattr(value, "item")
+                    else value
+                )
+                for key, value in data.items()
+            }
+
+            if "price" in data:
+                data["current"] = data.pop("price")
+
+            return {"symbol": sym, **data}
 
     @mcp.tool()
     async def get_intraday(
         symbol: str,
-        interval: Literal["raw", "1min", "5min", "15min", "30min", "60min"] = "5min",
+        interval: Literal[
+            "raw", "1min", "5min", "15min", "30min", "60min"
+        ] = "5min",
         limit: int = 50,
     ) -> dict:
         """Intraday price bars for the current/most recent trading session.
@@ -119,7 +151,11 @@ def register_tools(mcp: FastMCP, client: PSXClient) -> None:
         market_date = ticks[0].time.date().isoformat()
         if interval == "raw":
             rows = [
-                {"time": t.time.strftime("%H:%M:%S"), "price": t.price, "volume": t.volume}
+                {
+                    "time": t.time.strftime("%H:%M:%S"),
+                    "price": t.price,
+                    "volume": t.volume,
+                }
                 for t in ticks[: max(1, limit)]
             ]
             return {
@@ -161,7 +197,9 @@ def register_tools(mcp: FastMCP, client: PSXClient) -> None:
         if end_date:
             bars = [b for b in bars if b.date <= end_date]
         if not bars:
-            raise NoDataError(f"No EOD data for {normalize_symbol(symbol)} in the requested range.")
+            raise NoDataError(
+                f"No EOD data for {normalize_symbol(symbol)} in the requested range."
+            )
         top = bars[: max(1, limit)]
         return {
             "symbol": normalize_symbol(symbol),
@@ -183,7 +221,9 @@ def register_tools(mcp: FastMCP, client: PSXClient) -> None:
         now = datetime.now()
         if year < 2000 or (year, month) > (now.year, now.month):
             raise ValueError("year/month must be between 2000 and the current month")
-        bars = parse_historical(await client.fetch_historical(symbol, month, year))
+        bars = parse_historical(
+            await client.fetch_historical(symbol, month, year)
+        )
         return {
             "symbol": normalize_symbol(symbol),
             "month": month,
@@ -217,14 +257,22 @@ def register_tools(mcp: FastMCP, client: PSXClient) -> None:
 
         if sector:
             want = sector.strip().lower()
-            rows = [r for r in rows if sector_by_symbol.get(r.symbol, "").lower() == want]
+            rows = [
+                r for r in rows
+                if sector_by_symbol.get(r.symbol, "").lower() == want
+            ]
 
         if category == "volume":
             rows.sort(key=lambda r: r.volume or 0, reverse=True)
         elif category == "losers":
-            rows.sort(key=lambda r: r.change_pct if r.change_pct is not None else 0.0)
+            rows.sort(
+                key=lambda r: r.change_pct if r.change_pct is not None else 0.0
+            )
         else:
-            rows.sort(key=lambda r: r.change_pct if r.change_pct is not None else 0.0, reverse=True)
+            rows.sort(
+                key=lambda r: r.change_pct if r.change_pct is not None else 0.0,
+                reverse=True,
+            )
 
         top = rows[: min(max(1, limit), 100)]
         return {
@@ -325,12 +373,14 @@ def _aggregate(ticks: list[Tick], minutes: int) -> list[dict]:
     buckets: dict[datetime, list[Tick]] = {}
     for t in ticks:
         floored = t.time.replace(
-            minute=(t.time.minute // minutes) * minutes, second=0, microsecond=0
+            minute=(t.time.minute // minutes) * minutes,
+            second=0,
+            microsecond=0,
         )
         buckets.setdefault(floored, []).append(t)
     bars: list[dict] = []
     for key in sorted(buckets, reverse=True):
-        group = sorted(buckets[key], key=lambda t: t.time)  # oldest -> newest within bar
+        group = sorted(buckets[key], key=lambda t: t.time)
         prices = [t.price for t in group]
         bars.append(
             {
