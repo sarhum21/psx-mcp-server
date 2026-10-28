@@ -98,7 +98,7 @@ def register_tools(mcp: FastMCP, client: PSXClient) -> None:
         Live during market hours (Mon-Fri ~09:30-15:30 Pakistan time, UTC+5);
         outside hours it reflects the last session. For an index use get_indices.
         """
-        sym = await _require_known(symbol)
+        sym = normalize_symbol(symbol)
 
         try:
             quote = parse_quote(await client.fetch_company(sym))
@@ -107,7 +107,10 @@ def register_tools(mcp: FastMCP, client: PSXClient) -> None:
             df = await asyncio.to_thread(psxdata.quote, sym)
 
             if df.empty:
-                raise NoDataError(f"No quote data available for {sym}.")
+                raise NoDataError(
+                    f"No quote data available for {sym}. "
+                    "Use search_symbols to check available symbols."
+                )
 
             data = df.iloc[0].to_dict()
             data = {
