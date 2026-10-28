@@ -60,13 +60,23 @@ class PSXClient:
         )
 
         self._transport = None
-        self._client = client
 
-        if client is None:
+        if os.environ.get("PSX_DPS_TRANSPORT", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
             self._transport = Transport(
                 timeout=timeout,
                 retries=max_retries,
                 user_agent=ua,
+            )
+            self._client = client
+        else:
+            self._client = client or httpx.AsyncClient(
+                base_url=base_url,
+                headers={"User-Agent": ua},
+                timeout=timeout,
             )
 
         self._cache = TTLCache()

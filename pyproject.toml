@@ -39,7 +39,7 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
     "tzdata>=2024.1",
-    "psx-dps>=0.1.0",
+    "psx-dps @ git+https://github.com/umairsandhu/psx-dps.git",
 ]
 
 
@@ -63,6 +63,9 @@ dev = [
 
 [tool.hatch.version]
 path = "src/psx_mcp_server/__init__.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/psx_mcp_server"]
