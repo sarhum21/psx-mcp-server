@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from datetime import datetime
 
 import httpx
@@ -112,11 +113,73 @@ class PSXClient:
     async def _post(self, path: str, form: dict[str, str], ttl: int) -> str:
         return await self._request("POST", path, form, ttl)
 
-    async def _request(self, method: str, path: str, form: dict[str, str] | None, ttl: int) -> str:
+   
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        form: dict[str, str] | None,
+        ttl: int,
+    ) -> str:
         key = (method, path, frozenset(form.items()) if form else None)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
+
+        last_exc: Exception | None = None
+
+        for attempt in range(self._max_retries):
+            try:
+                homepage = await self._client.get("/")
+                homepage.raise_for_status()
+
+                match = re.search(
+                    r'X-Req-Id["\']?\s*[:=]\s*["\']([^"\']+)',
+                    homepage.text,
+                    re.IGNORECASE,
+                )
+
+                if not match:
+                    raise PSXUnavailableError(
+                        "Could not find X-Req-Id in the PSX homepage."
+                    )
+
+                headers = {
+                    "X-Req-Id": match.group(1),
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Referer": f"{BASE_URL}/",
+                }
+
+                resp = await self._client.request(
+                    method,
+                    path,
+                    data=form,
+                    headers=headers,
+                )
+
+                if resp.status_code < 400:
+                    self._cache.set(key, resp.text, ttl)
+                    return resp.text
+
+                if resp.status_code < 500:
+                    raise PSXUnavailableError(
+                        f"PSX returned HTTP {resp.status_code} for {path}."
+                    )
+
+                last_exc = PSXUnavailableError(
+                    f"PSX returned HTTP {resp.status_code} for {path}."
+                )
+
+            except _RETRYABLE_EXC as exc:
+                last_exc = exc
+
+            if attempt < self._max_retries - 1:
+                await asyncio.sleep(self._backoff_base * (2**attempt))
+
+        raise PSXUnavailableError(
+            f"PSX request failed for {path} after "
+            f"{self._max_retries} attempts: {last_exc}"
+        )
 
         headers = {"X-Requested-With": "XMLHttpRequest"} if method == "POST" else None
         last_exc: Exception | None = None
