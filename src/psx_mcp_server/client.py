@@ -169,8 +169,8 @@ class PSXClient:
                 response_text = await asyncio.to_thread(
                     self._transport.request,
                     path,
-                    form,
-                    ttl,
+                    body=form,
+                    ttl=ttl,
                 )
             except Exception as exc:
                 raise PSXUnavailableError(
